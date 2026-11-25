@@ -188,6 +188,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn late_frame_events_catch_up_without_delaying_origins() {
+        const CHILD: &str = "VICTORY_TEST_LATE_FRAME_EVENTS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "frame::tests::late_frame_events_catch_up_without_delaying_origins",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .expect("start an isolated frame-clock test process");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "isolated frame-clock test failed: {}\n{stdout}\n{stderr}",
+                output.status,
+            );
+            return;
+        }
+        let interval = Duration::from_secs(3_600);
+        let start = Instant::now() - Duration::from_secs(19_800);
+        *clock() = Some(Clock {
+            start,
+            interval,
+            first: 100,
+        });
+        LAST[0].store(100, Ordering::Relaxed);
+        LAST[1].store(101, Ordering::Relaxed);
+        LAST[2].store(101, Ordering::Relaxed);
+
+        // Five ticks passed since the origin, but the flip has only consumed
+        // the first. It catches up to the latest passed tick immediately.
+        let (flip, delay) = next_tick(2);
+        assert_eq!(flip, 105);
+        assert_eq!(delay, Duration::ZERO);
+        let (vblank, delay) = next_tick(1);
+        assert_eq!(vblank, 105);
+        assert_eq!(delay, Duration::ZERO);
+
+        // Origin events never catch up: the next origin is strictly future.
+        let (origin, delay) = next_tick(0);
+        assert_eq!(origin, 106);
+        assert!(delay > Duration::ZERO);
+
+        // Once that latest passed event tick has already been consumed,
+        // another event must wait for a strictly later tick.
+        LAST[2].store(105, Ordering::Relaxed);
+        let (next_flip, delay) = next_tick(2);
+        assert_eq!(next_flip, 106);
+        assert!(delay > Duration::ZERO);
+    }
+
+    #[test]
     fn waits_end_on_ticks_and_count_frames() {
         let null = std::ptr::null();
         assert_eq!(set_interval(null, null, 2_000, 1, 0), S_OK);
