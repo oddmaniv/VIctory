@@ -292,7 +292,12 @@ impl Layout {
             && d.samples.is_power_of_two()
             && d.samples <= 8
             && (d.samples == 1
-                || (d.dimension == Dimension::Tex2d && d.mips == 1 && d.swizzle != Swizzle::LINEAR))
+                || (d.dimension == Dimension::Tex2d
+                    && d.mips == 1
+                    && d.swizzle != Swizzle::LINEAR
+                    && !d.swizzle.standard()
+                    && !d.swizzle.display()
+                    && block_log2 != 8))
             && (d.dimension != Dimension::Tex1d || d.height == 1)
             && (d.dimension != Dimension::Tex3d
                 || matches!(d.swizzle.0, 0 | 5 | 9 | 17 | 21 | 24..=27));
@@ -901,6 +906,41 @@ mod tests {
             .unwrap();
             assert_eq!(tiled.size, single.size * u64::from(samples));
         }
+    }
+
+    #[test]
+    fn standard_and_display_swizzles_reject_multisampling() {
+        for swizzle in [
+            Swizzle::SW_256B_S,
+            Swizzle::SW_256B_D,
+            Swizzle::SW_4KB_S,
+            Swizzle::SW_4KB_D,
+            Swizzle::SW_64KB_S,
+            Swizzle::SW_64KB_D,
+        ] {
+            let single = desc(64, 64, 1, 4, swizzle);
+            assert!(Layout::new(&single).is_ok(), "{swizzle:?} single-sample");
+            for samples in [2, 4, 8] {
+                assert_eq!(
+                    Layout::new(&Desc { samples, ..single }),
+                    Err(Error::Invalid),
+                    "{swizzle:?} with {samples} samples"
+                );
+            }
+        }
+
+        for swizzle in [Swizzle::SW_64KB_Z_X, Swizzle::SW_64KB_R_X] {
+            let valid = Desc {
+                samples: 4,
+                ..desc(64, 64, 1, 4, swizzle)
+            };
+            assert!(Layout::new(&valid).is_ok(), "{swizzle:?} MSAA control");
+        }
+        let render_control = Desc {
+            samples: 1,
+            ..desc(64, 64, 1, 4, Swizzle::SW_64KB_R_X)
+        };
+        assert!(Layout::new(&render_control).is_ok());
     }
 
     /// Sizes past the hardware's 16384 texels per side are refused instead
